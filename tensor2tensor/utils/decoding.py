@@ -20,6 +20,10 @@ from __future__ import print_function
 
 import operator
 import os
+import time
+import sys
+from datetime import datetime
+
 
 # Dependency imports
 
@@ -100,6 +104,31 @@ def log_decode_results(inputs,
     tf.logging.info("Inference results TARGET: %s" % decoded_targets)
   return decoded_inputs, decoded_outputs, decoded_targets
 
+class _LoggerHook(tf.train.SessionRunHook):
+  """ Logs performance in tokens/sec."""
+
+  def begin(self):
+    self._step = -1
+    self._displayed_steps = 0
+    self._total_tokens_per_sec = 0
+
+  def before_run(self, run_context):
+    self._step += 1
+    self._start_time = time.time()
+
+  def after_run(self, run_context, run_values):
+    duration = time.time() - self._start_time
+    if self._step % 1 == 0:
+      tokens_per_sec = BATCH_SIZE / duration
+      self._displayed_steps += 1
+      self._total_tokens_per_sec += tokens_per_sec
+
+      format_str = ('%s: step %d, %.2f tokens/sec, %.2f sec')
+      print (format_str % (datetime.now(), self._step, tokens_per_sec, duration))
+
+  def end(self, run_context):
+    print('Total tokens/sec = %.1f' %
+    (self._total_tokens_per_sec / self._displayed_steps))
 
 def decode_from_dataset(estimator,
                         problem_names,
@@ -118,11 +147,15 @@ def decode_from_dataset(estimator,
     hparams.batch_size = decode_hp.batch_size
     hparams.use_fixed_batch_size = True
 
+  global BATCH_SIZE
+  BATCH_SIZE = hparams.batch_size
+
   dataset_kwargs = {
       "shard": shard,
       "dataset_split": dataset_split,
   }
 
+  hooks = [_LoggerHook()]
   for problem_idx, problem_name in enumerate(problem_names):
     # Build the inference input function
     problem = hparams.problem_instances[problem_idx]
@@ -130,7 +163,7 @@ def decode_from_dataset(estimator,
         tf.estimator.ModeKeys.PREDICT, hparams, dataset_kwargs=dataset_kwargs)
 
     # Get the predictions as an iterable
-    predictions = estimator.predict(infer_input_fn)
+    predictions = estimator.predict(infer_input_fn,hooks=hooks)
 
     # Prepare output file writers if decode_to_file passed
     if decode_to_file:
